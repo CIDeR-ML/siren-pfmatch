@@ -29,5 +29,7 @@ def loader_factory(cfg):
     if loader_type == 'DataLoader':
         loader_cfg['collate_fn']=ds.read_many
     loader = getattr(loaders,loader_type)(ds, **loader_cfg)
-    
+    if loader_type == 'DataLoader':
+        loader_cfg['collate_fn']='ds.read_many'
     return loader
+
