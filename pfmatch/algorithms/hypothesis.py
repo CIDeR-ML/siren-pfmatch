@@ -2,14 +2,43 @@ from __future__ import annotations
 from itertools import compress
 
 import torch
+import numbers
 from photonlib import PhotonLib, MultiLib
 from slar.nets import SirenVis, MultiVis
 
+def shift_x_in_chunk(coords, sizes, dx):
+    """
+    Shift x -> x + dx, allowing dx = 0 or None.
+    
+    Arguments
+    ---------
+    corrds : Tensor (N,3) 
+        Input coordinates
+    sizes: Tensor (M,)
+        Split size of coords into M chunks.
+    dx: Tensor (M,) | 0 | None
+        Offset in x, one per chunk. Do nothing if dx = 0 or None.
 
+
+    Returns
+    -------
+    coords_new : Tensor (N,3)
+        Output cooridinates
+    """
+
+    if dx is None:
+        return coords
+
+    if isinstance(dx, numbers.Real) and dx==0:
+        return coords
+
+    x = coords[:,0] + dx.repeat_interleave(sizes)
+    coords_new = torch.column_stack([x, coords[:,1:]])
+    return coords_new
 
 class F(torch.autograd.Function):
     """
-        Custom autograd function for PhotonLib
+    Custom autograd function for PhotonLib
     """
 
     @staticmethod
@@ -99,22 +128,21 @@ class PLibPrediction(torch.autograd.Function):
     
     @staticmethod
     def forward(ctx, dx, batch, sizes, plib):
-        coords = batch[:,:3].clone()
-        coords[:,0] += dx.repeat_interleave(sizes)
+        coords = shift_x_in_chunk(batch[:,:3], sizes, dx)
     
         q = batch[:,3]
         
-        #vox_ids = plib.meta.coord_to_voxel(coords)
-        sizes = list(sizes.cpu())
-        
-        #ctx.save_for_backward(vox_ids, q)
         ctx.save_for_backward(coords,q)
         ctx.plib = plib
         ctx.sizes = sizes
         
-        split_vis_q = torch.split(plib.visibility(coords)*q.unsqueeze(-1), sizes)
-        
-        pred = torch.stack([vis_q.sum(axis=0) for vis_q in split_vis_q])
+        pred = torch.segment_reduce(
+            plib.visibility(coords) * q.unsqueeze(-1),
+            'sum',
+            lengths=sizes,
+            axis=0
+        )
+
         return pred
             
     @staticmethod
@@ -123,19 +151,15 @@ class PLibPrediction(torch.autograd.Function):
         plib = ctx.plib
         sizes = ctx.sizes
         
-        grad_pred_x = plib.gradx(coords)
-        grad_pred_x *= q.unsqueeze(-1)
-        
-        grad_pairs = zip(
-            torch.split(grad_pred_x, sizes),
-            grad_output,
+        grad_pred_x = torch.segment_reduce(
+            plib.gradx(coords) * q.unsqueeze(-1),
+            'sum',
+            lengths=sizes,
+            axis=0
         )
-        
-        grad_x = torch.cat([
-            grad_in.sum(axis=0).matmul(grad_out).unsqueeze(-1)
-            for grad_in, grad_out in grad_pairs
-        ])
-            
+
+        grad_x = (grad_pred_x * grad_output).sum(axis=1)
+
         return grad_x, None, None, None
 
 class MultiFlashHypothesis(torch.nn.Module):
@@ -263,15 +287,17 @@ class MultiFlashHypothesis(torch.nn.Module):
             output = PLibPrediction.apply(dx, batch, sizes, vis_model)
 
         elif isinstance(vis_model, SirenVis) or isinstance(vis_model, MultiVis):
-            coords = batch[:,:3].clone()
-            coords[:,0] += dx.repeat_interleave(sizes)
+            coords = shift_x_in_chunk(batch[:,:3], sizes, dx)
 
             q = batch[:,3]
-            _sizes = list(sizes.cpu())
-            vis_q = vis_model.visibility(coords) * q.unsqueeze(-1)
-            output = torch.stack([
-                blk.sum(axis=0) for blk in torch.split(vis_q, _sizes)
-            ])
+
+            output = torch.segment_reduce(
+                vis_model.visibility(coords) * q.unsqueeze(-1),
+                'sum',
+                lengths=sizes,
+                axis=0,
+            )
+
         else:
             raise TypeError('Unsupported type(vis_mod)', type(vis_model))
         return output
