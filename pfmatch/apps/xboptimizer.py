@@ -9,9 +9,34 @@ from tqdm.auto import trange
 from photonlib import PhotonLib, MultiLib
 from slar.nets import SirenVis, MultiVis
 from pfmatch.datatypes import QCluster, Flash, FlashMatchInput
-from pfmatch.algorithms import PoissonMatchLoss, MultiFlashHypothesis
+from pfmatch.algorithms import  MultiFlashHypothesis
 from pfmatch.utils import scheduler_factory
 from scipy.optimize import linear_sum_assignment
+
+def criterion_factory(cfg={}):
+    """
+    A factory to create loss function from cfg dict.
+    Default: PoissonMatchLoss
+
+    Example:
+    ```
+    cfg = {
+        'Class': 'Chi2Loss', 
+        'Param': {
+            'eps': 0.001}
+        }
+    }
+
+    crit = criterion_factory(cfg)
+    ```
+
+    """
+    import pfmatch.algorithms as module
+            
+    class_name = cfg.get('Class', 'PoissonMatchLoss')
+    kwargs = cfg.get('Param', {})
+            
+    return getattr(module, class_name)(**kwargs)
 
 class XBatchOptimizer:
     '''
@@ -94,6 +119,14 @@ class XBatchOptimizer:
         PrefilterLoss: 200
 
         # -------------------------------------------------------
+        # Loss function. Default: PoissonMatchLoss if not set
+        # -------------------------------------------------------
+        # Criterion:
+        #    Class: Chi2Loss
+        #    Param:
+        #       eps: 0.001
+
+        # -------------------------------------------------------
         # More messages?
         # -------------------------------------------------------
         Verbose: False
@@ -126,13 +159,14 @@ class XBatchOptimizer:
         self.data_key = {'qcluster':'qcluster_v', 'flash':'pe_v'}
         self.data_key.update(this_cfg.get('DataKey', {}))
 
-        self.crit = PoissonMatchLoss()
+        self.crit = criterion_factory(this_cfg.get('Criterion', {}))
 
         # verbose messages
         if len(this_cfg) == 0:
             self.print('[XBatchOptimizer] use default configuration')
 
         self.print(f'[XBatchOptimizer] {type(vis_model)}, device={self.device}')
+        self.print('[XBatchOptimizer]', self.crit)
 
         if ((isinstance(vis_model, SirenVis) or isinstance(vis_model, MultiVis))
                 and self.device==torch.device('cpu')):
@@ -851,5 +885,61 @@ class XBatchOptimizer:
             match = self.match(output, batch)
             output['match'] = match
             output['tspent'] += match['tspent']
+
+        return output
+
+
+    def simple_fit(self, input : FlashMatchInput):
+        '''
+        Flash mathcing without x-optimization.
+
+        Arguments
+        ---------
+        input: FlashMatchInput
+
+        Returns
+        -------
+        output: dict
+
+            `tspent`: float
+                Time spent in seconds for the matching
+
+            `idx`: list of (int, int)
+                Indices for the matched (charge, flash) pairs.
+                `None` if the bipartite match fails.
+
+            `loss_matrix`: tensor
+                Loss matrix of all pair combinations.
+
+            `pe_pred`: tensor
+                Predicted p.e. from input charge clusters.
+        '''
+        
+        t_start = time.time()
+        
+        batch = self.make_input_batch(input)
+        with torch.no_grad():
+            pred = MultiFlashHypothesis.apply(
+                0, batch['qclusters'], batch['sizes'], self._vis_model
+            )
+
+        obs = batch['flashes']
+
+        loss_matrix = self.crit(pred.unsqueeze(0), obs.unsqueeze(1)).cpu()
+
+        try:
+            idx = linear_sum_assignment(loss_matrix)
+        except ValueError:
+            self.print('Fail to do biparitite match!')
+            idx = None
+
+        t_stop = time.time()
+
+        output = {
+            'tspent': t_stop - t_start,
+            'idx': idx,
+            'loss_matrix': loss_matrix,
+            'pe_pred': pred.cpu(),
+        }
 
         return output
