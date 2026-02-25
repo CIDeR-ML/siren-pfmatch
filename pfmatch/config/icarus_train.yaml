@@ -7,12 +7,12 @@ photonlib:
 
 data:
   dataset:
-    filepath: /sdf/home/y/youngsam/data/soptim_dataset_50k_uniform.h5
+    filepath: soptim_dataset_50k_uniform.h5
     size: 20000
   loader:
     batch_size: 100
     drop_last: true
-    num_workers: 4
+    num_workers: 1
     pin_memory: true
     shuffle: true
 
@@ -60,3 +60,5 @@ transform_vis:
   eps: 1.0e-07
   sin_out: true
   vmax: 1.0
+
+ToyMC: icarus_toymc
