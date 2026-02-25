@@ -1,4 +1,5 @@
 import torch
+from time import time
 
 from tqdm.auto import tqdm
 from slar.nets import SirenVis, MultiVis
@@ -50,6 +51,7 @@ class SOptimizer:
         print('[Criterion]', self.criterion)
 
         self.epoch = 0
+        self.current_loss = 1.e9
         self.n_iter = 0
         self.epoch_max = train_cfg.get('max_epochs', int(1e20))
         self.iter_max = train_cfg.get('max_iterations', int(1e20))
@@ -79,15 +81,12 @@ class SOptimizer:
             target = torch.stack(batch['flashes']).to(device)
         else:
             target = batch['flashes']
-        
-        vis_q = self._model.visibility(qpts[:,:3]) * qpts[:,-1].unsqueeze(-1)    
-        pred = torch.stack([
-            arr.sum(axis=0) for arr in torch.split(vis_q, sizes)
-        ])
 
+        #tstart=time()
+        vis_q = self._model.visibility(qpts[:,:3]) * qpts[:,-1].unsqueeze(-1)    
+        pred = torch.stack([arr.sum(axis=0) for arr in torch.split(vis_q, sizes)])
         loss = self.criterion(pred, target)
-        
-        return pred, loss
+        return loss
     
     def train(self):
         while self.epoch < self.epoch_max and self.n_iter < self.iter_max:
@@ -96,33 +95,34 @@ class SOptimizer:
         self._logger.close()
     
     def train_one_epoch(self):
-        from time import time
         
         t_start = time()
-        for batch in tqdm(self._dataloader, desc=f'epoch {self.epoch}'):
+        for batch in tqdm(self._dataloader, desc=f'epoch {self.epoch}, loss {self.current_loss: .2f}'):
             t_wait = time() - t_start
             
             t_start = time()
             self._optimizer.zero_grad()
-            pred, loss_pred = self.step(batch)
+            loss_pred = self.step(batch)
+            t_forward = time() - t_start
             
             loss = loss_pred.mean()
             loss.backward()
             self._optimizer.step()
-            
             #TODO(2024-03-27 kvt) add step(loss)
             if self._scheduler is not None:
                 self._scheduler.step()
             
             t_train = time() - t_start
-            
+            self.current_loss = loss.item()
+
             # Logger
             log_dict = {
                 'iter': self.n_iter,
                 'epoch': self.epoch,
-                'loss': loss.item(),
+                'loss': self.current_loss,
                 'twait': t_wait,
                 'ttrain' : t_train,
+                'tforward' : t_forward,
                 'lr': self.lr/self.lr0,
             }
             self.log(log_dict)

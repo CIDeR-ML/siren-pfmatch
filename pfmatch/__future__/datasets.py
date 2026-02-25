@@ -3,7 +3,7 @@ import torch
 import numpy as np
 DEFAULT_DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-from torch.utils.data import Dataset, RandomSampler, BatchSampler, DataLoader
+from torch.utils.data import Dataset
 from contextlib import closing
 from pfmatch.io import H5File
 
@@ -193,7 +193,7 @@ class TracksInConsecutiveMemory(Dataset):
         self.len_v = tuple([len(qc) for qc in self.qcluster_v])
         self.qcluster_v = torch.concat(self.qcluster_v).to(self.device)
         self.flash_v = torch.concat(self.flash_v).to(self.device)
-        
+
     def __len__(self):
         return len(self.len_v)
     
