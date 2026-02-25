@@ -53,7 +53,7 @@ class SOptimizer:
             'train': DataLoader(train, collate_fn=dataset.collate_fn, generator=generator, **cfg['data']['loader']),
             'val': DataLoader(val, collate_fn=dataset.collate_fn, generator=generator, **cfg['data']['loader'])
         }   
-        self._opt, epoch = optimizer_factory(self._model.parameters(), cfg)
+        self._opt, __, epoch = optimizer_factory(self._model.parameters(), cfg)
         
         # resume training?
         self.iteration, self.epoch = 0, 0
@@ -144,7 +144,7 @@ class SOptimizer:
         weights = input['weights']
         
         # compute loss
-        loss = self.criterion(pred, target, weights)
+        loss = self.criterion(pred, target, weights).mean()
 
         return target, pred, loss
     
@@ -221,7 +221,10 @@ class SOptimizer:
             count = self.iteration/len(self.dataloader['train'].dataset)
 
         filename = os.path.join(self.logger.logdir,'iteration-%06d-epoch-%04d.ckpt')
-        self.model.save_state(filename % (self.iteration, self.epoch), self.opt, count)
+        self.model.save_state(
+            filename % (self.iteration, self.epoch), 
+            self.opt, self.scheduler, count
+        )
 
     def validate(self):
         """Validates the model using the validation dataset."""
