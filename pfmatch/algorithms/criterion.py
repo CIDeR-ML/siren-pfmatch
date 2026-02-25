@@ -20,17 +20,16 @@ class Chi2Loss(torch.nn.Module):
     '''
     Chi2 loss w/ additional (constant) error terms.
     '''
-    def __init__(self, err0=0):
+    def __init__(self, eps=0.01):
         super().__init__()
         self.register_buffer(
-            '_err0', torch.as_tensor(err0, dtype=torch.float32)
+            'eps', torch.as_tensor(eps, dtype=torch.float32)
         )
         
-    def forward(self, input, target):
-        w = 1 / (input + self._err0**2)
-        mask = ~target.isnan()
-        loss = w[mask] * (input[mask] - target[mask])**2
-        return loss.mean()
+    def forward(self, input, target, axis=-1):
+        H = input.clamp(min=0)
+        O = target.clamp(min=0)
+        return torch.nanmean((H - O)**2 / (O + self.eps), axis=axis)
 
     def __str__(self):
-        return f'Chi2Loss(err0={self._err0})'
+        return f'Chi2Loss(eps={self.eps})'
